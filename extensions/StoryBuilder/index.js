@@ -13,9 +13,10 @@ import { createChatInterceptor } from './chat-interceptor.js';
 import { runChatWorkflow } from './chat-runner.js';
 import { bindChatProgressLayout } from './chat-layout.js';
 import { createRegenerateAction, storyTicketCurrent } from './regenerate-action.js';
+import { WRITING_ASPECTS, WRITING_PRESETS, normalizePresetLibrary, buildWritingGuidance, specialistPasses } from './writing-tuning.js';
 
 const KEY = 'StoryBuilder';
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 const ctx = () => SillyTavern.getContext();
 let job = null, controller = null, operation = 0, applying = false;
 let dialog, status, counts, usage, outline, draftPreview, pendingPreview, notices, panelStatus;
@@ -24,6 +25,8 @@ let settingsFields = [], outlineFields = [], planControls, previewDetails, pendi
 let applied = false, stale = false, mounted = false;
 let editorialPanel, editorialDetails, memoryButton, acceptedTarget = null, continuityPanel, continuityDetails;
 let chatRunController = null, chatProgress, chatLayout, automaticVisible = false, progressStage = '', chatToggle, chatTicket = null;
+let modeButton, modeNote, catalogButton, catalogNote, modelList, catalogLoading = false;
+let styleControls = [], preferenceButtons = [], presetLibrary = {};
 let activityEntries = [], activityEpoch = 0, activitySequence = 0, activityTimer = null;
 const activityWaiters = new Map();
 const ACTIVITY_STAGES = Object.freeze({
@@ -113,7 +116,7 @@ function refreshChatProgress() {
         canResume: !busy && !workflowFinished() && (applied ? Boolean(acceptedTarget) : job ? sourceCurrent() : !stale && ticketCurrent()),
         canDownload: Boolean(safeTotals().completedSections), canDismiss: !busy,
         activity: activityEntries, now: Date.now(), spend: currentSpend() });
-    if (chatToggle) chatToggle.disabled = busy;
+    syncGenerationMode();
     chatLayout?.refresh();
 }
 function setStage(stage) {
@@ -123,6 +126,31 @@ function setStage(stage) {
 function pauseWorkflow() {
     chatInterceptor.cancel(); chatRunController?.abort(); controller?.abort();
     setStage('paused'); say('Pausing. Completed sections and reviews are kept in this tab.');
+}
+function syncGenerationMode() {
+    const enabled = getSettings().chatWorkflowEnabled;
+    if (chatToggle) { chatToggle.checked = enabled; chatToggle.disabled = false; }
+    if (modeButton) {
+        modeButton.textContent = enabled ? 'Generation: Story Builder' : 'Generation: Standard';
+        modeButton.setAttribute('aria-pressed', String(enabled));
+        modeButton.title = enabled ? 'Switch to standard SillyTavern generation. Running story work will pause.' : 'Switch to the Story Builder workflow for your next Send or Regenerate.';
+        modeButton.dataset.ntTopbarLabel = modeButton.textContent;
+    }
+    if (modeNote) modeNote.textContent = job && !workflowFinished()
+        ? 'Your staged story is kept. A new message or changed chat can prevent resuming it; download completed work first.'
+        : enabled ? 'Paste your prompt in chat, then Send. Story Builder plans, writes, and reviews.' : 'Send and Regenerate use your usual SillyTavern generation.';
+}
+function setGenerationMode(enabled) {
+    extension_settings[KEY] = { ...getSettings(), chatWorkflowEnabled: enabled === true };
+    ctx().saveSettingsDebounced();
+    if (!enabled) {
+        chatInterceptor.cancel();
+        if (controller || chatRunController) {
+            chatRunController?.abort(); controller?.abort(); automaticVisible = true;
+            setStage('paused'); say('Switching to Standard. Pausing story work; completed sections remain available. The next Send or Regenerate uses ordinary generation.');
+        }
+    }
+    syncGenerationMode(); refreshControls();
 }
 async function automaticStory({ fresh = false, ticket } = {}) {
     if (chatRunController || controller || applying) return;
@@ -194,6 +222,9 @@ function getSettings() { return normalizeSettings({ ...DEFAULTS, ...extension_se
 function storeSettings() {
     const next = { ...getSettings() };
     for (const { input, key, numeric, checkbox } of settingsFields) next[key] = checkbox ? input.checked : numeric ? Number(input.value) : input.value.trim();
+    next.writingPresetLibrary = presetLibrary;
+    next.writingStyles = Object.fromEntries(styleControls.map(({ aspect, preset, custom, model }) => [aspect.id,
+        { preset: preset.value, custom: custom.value, model: model.value.trim() }]));
     const validated = normalizeSettings(next);
     // Only preferences are saved. Source prompts, outlines, and drafts stay in this tab's memory.
     extension_settings[KEY] = validated;
@@ -310,6 +341,10 @@ function refreshControls() {
     downloadButton.textContent = job?.status === 'complete' ? 'Download plain-text story' : 'Download partial plain-text story';
     discardButton.disabled = busy || !job;
     settingsFields.forEach(({ input }) => { input.disabled = busy || Boolean(job); });
+    for (const control of styleControls) for (const input of [control.preset, control.custom, control.model, control.name, control.save, control.remove]) input.disabled = busy || Boolean(job);
+    for (const control of styleControls) if (!presetLibrary[control.aspect.id]?.some(value => value.id === control.preset.value)) control.remove.disabled = true;
+    preferenceButtons.forEach(input => { input.disabled = busy || Boolean(job); });
+    if (catalogButton) catalogButton.disabled = busy || Boolean(job) || catalogLoading;
     const spendingField = settingsFields.find(field => field.key === 'spendLimitUsd');
     const trackerField = settingsFields.find(field => field.key === 'updateTracker');
     if (Number(spendingField?.input.value) > 0 && trackerField) { trackerField.input.checked = false; trackerField.input.disabled = true; }
@@ -395,7 +430,9 @@ function renderEditorial() {
     }
     for (const item of edit.reports || []) {
         const report = item.report || item;
-        const box = el('details'); box.append(el('summary', `${item.focus === 'continuity' ? 'Continuity and instructions' : 'Prose and pacing'} · review ${(item.cycle ?? 0) + 1}`), el('p', report.summary || 'Review complete.'));
+        const label = item.focus === 'continuity' ? 'Continuity and instructions' : item.focus === 'prose' ? 'Prose and pacing'
+            : WRITING_ASPECTS.find(aspect => aspect.id === item.focus)?.label || 'Additional review';
+        const box = el('details'); box.append(el('summary', `${label} · review ${(item.cycle ?? 0) + 1}`), el('p', report.summary || 'Review complete.'));
         const list = el('ul');
         for (const issue of report.issues || []) list.append(el('li', `${issue.severity} · ${issue.category}: ${issue.problem} ${issue.suggestion}`));
         box.append(list); editorialPanel.append(box);
@@ -539,7 +576,9 @@ async function generate({ signal } = {}) {
             };
             await runEditorialWorkflow(job, services, editorialTransport, {
                 signal: controller.signal, maxCycles: job.settings.revisionCycles, maxGroupsPerCycle: job.settings.maxRevisionPassages,
-                settings: { model: job.settings.reviewerModel, maxOutput: 16384, wordMin: job.settings.wordMin, wordMax: job.settings.wordMax, paragraphMin: job.settings.paragraphMin, paragraphMax: job.settings.paragraphMax },
+                settings: { model: job.settings.reviewerModel, revisionModel: job.settings.revisionModel || job.settings.reviewerModel,
+                    writingGuidance: buildWritingGuidance(job.settings), specialists: specialistPasses(job.settings),
+                    maxOutput: 16384, wordMin: job.settings.wordMin, wordMax: job.settings.wordMax, paragraphMin: job.settings.paragraphMin, paragraphMax: job.settings.paragraphMax },
                 onProgress(progress) { if (token === operation) { setStage(progress.stage || 'reviewing'); say(progress.message || 'Reviewing the manuscript…'); refreshControls(); } },
             });
             if (token !== operation) return;
@@ -632,20 +671,117 @@ function changed(force = false) {
     stale = true; chatRunController?.abort(); controller?.abort();
     say('The source changed. This job is paused; completed sections remain available to download.'); refreshControls();
 }
+function renderStyleChoices(control, selected = control.preset.value) {
+    control.preset.replaceChildren();
+    for (const preset of WRITING_PRESETS[control.aspect.id]) {
+        const option = el('option', preset.label); option.value = preset.id; control.preset.append(option);
+    }
+    const custom = el('option', 'Custom instructions'); custom.value = 'custom'; control.preset.append(custom);
+    for (const saved of presetLibrary[control.aspect.id] || []) {
+        const option = el('option', `Saved: ${saved.name}`); option.value = saved.id; control.preset.append(option);
+    }
+    control.preset.value = selected;
+}
+function selectStylePreset(control) {
+    const saved = presetLibrary[control.aspect.id]?.find(value => value.id === control.preset.value);
+    const builtin = WRITING_PRESETS[control.aspect.id].find(value => value.id === control.preset.value);
+    if (saved || builtin) control.custom.value = saved?.text ?? builtin.instruction;
+    control.name.value = saved?.name || '';
+    refreshControls();
+}
+function saveStylePreset(control) {
+    if (job || controller || chatRunController || applying) return;
+    const oldLibrary = presetLibrary, oldPreset = control.preset.value;
+    try {
+        const name = control.name.value.trim(), text = control.custom.value;
+        const entries = presetLibrary[control.aspect.id] || [], existing = entries.find(value => value.name === name);
+        const entry = { id: existing?.id || `custom-${globalThis.crypto.randomUUID()}`, name, text };
+        presetLibrary = normalizePresetLibrary({ ...presetLibrary, [control.aspect.id]: existing ? entries.map(value => value.id === entry.id ? entry : value) : [...entries, entry] });
+        renderStyleChoices(control, entry.id); storeSettings();
+        say(`Saved the ${control.aspect.label.toLowerCase()} preset. It can be selected again in Advanced settings.`);
+    } catch (error) {
+        presetLibrary = oldLibrary; renderStyleChoices(control, oldPreset); say(error.message || 'The preset could not be saved. Check its name and instructions.');
+    }
+    refreshControls();
+}
+function deleteStylePreset(control) {
+    if (job || controller || chatRunController || applying) return;
+    const selected = presetLibrary[control.aspect.id]?.find(value => value.id === control.preset.value);
+    if (!selected) return;
+    const oldLibrary = presetLibrary;
+    try {
+        control.custom.value = selected.text;
+        presetLibrary = normalizePresetLibrary({ ...presetLibrary, [control.aspect.id]: presetLibrary[control.aspect.id].filter(value => value.id !== selected.id) });
+        renderStyleChoices(control, 'custom'); storeSettings(); control.name.value = '';
+        say('Deleted the named preset. Its instructions remain in the current custom field.');
+    } catch (error) { presetLibrary = oldLibrary; renderStyleChoices(control, selected.id); say(error.message || 'The preset could not be deleted.'); }
+    refreshControls();
+}
+function mountWritingStyles(parent, values) {
+    presetLibrary = normalizePresetLibrary(values.writingPresetLibrary);
+    const enableLabel = el('label', undefined, 'sb-check'), enable = el('input'); enable.type = 'checkbox'; enable.checked = values.tuningEnabled;
+    enable.id = 'story-builder-setting-tuningEnabled';
+    enableLabel.append(enable, document.createTextNode(' Enable writing styles and optional specialist passes'));
+    settingsFields.push({ input: enable, key: 'tuningEnabled', checkbox: true }); parent.append(enableLabel);
+    parent.append(el('p', 'These preferences shape one coherent story. Leave them off to keep your existing prompt and preset behavior. Specialist models review and revise the shared manuscript; they do not write separate fragments. Each selected specialist adds paid requests, requires manuscript reviews to be on, and shares the story budget and revision limits.', 'sb-note'));
+    for (const aspect of WRITING_ASPECTS) {
+        const section = el('section', undefined, 'sb-style-section'); section.append(el('h3', aspect.label), el('p', aspect.description, 'sb-note'));
+        const preset = el('select'), custom = el('textarea'), model = el('input'), name = el('input');
+        preset.className = custom.className = model.className = name.className = 'text_pole';
+        preset.id = `story-builder-style-${aspect.id}-preset`; custom.id = `story-builder-style-${aspect.id}-custom`;
+        model.id = `story-builder-style-${aspect.id}-model`; name.id = `story-builder-style-${aspect.id}-name`;
+        model.type = name.type = 'text'; model.setAttribute('list', 'story-builder-model-catalog');
+        model.placeholder = 'No extra specialist'; custom.maxLength = 8000; name.maxLength = 80;
+        const value = values.writingStyles[aspect.id]; custom.value = value.custom; model.value = value.model; name.value = '';
+        const control = { aspect, preset, custom, model, name };
+        renderStyleChoices(control, value.preset);
+        const saved = presetLibrary[aspect.id].find(item => item.id === value.preset), builtin = WRITING_PRESETS[aspect.id].find(item => item.id === value.preset);
+        if (saved || builtin) custom.value = saved?.text ?? builtin.instruction;
+        if (saved) name.value = saved.name;
+        for (const [labelText, input] of [['Style preset', preset], ['Style instructions — editing makes a custom style', custom], ['Optional specialist model — blank adds no extra pass', model], ['Name for a reusable preset', name]]) {
+            const label = el('label', labelText); label.append(input); section.append(label);
+        }
+        const actions = el('div', undefined, 'sb-actions');
+        control.save = button('Save named preset', () => saveStylePreset(control), actions);
+        control.remove = button('Delete selected preset', () => deleteStylePreset(control), actions);
+        section.append(actions, el('p', 'Saving an existing name updates that preset. Deleting a selected preset keeps its text as custom instructions.', 'sb-note'));
+        preset.addEventListener('change', () => selectStylePreset(control));
+        custom.addEventListener('input', () => { preset.value = 'custom'; refreshControls(); });
+        styleControls.push(control); parent.append(section);
+    }
+}
+async function loadModelCatalog() {
+    if (catalogLoading || job || controller || chatRunController || applying) return;
+    catalogLoading = true; catalogNote.textContent = 'Loading model IDs…'; refreshControls();
+    try {
+        const response = await fetch('/api/backends/chat-completions/status', { method: 'POST', headers: ctx().getRequestHeaders(), body: JSON.stringify({ chat_completion_source: 'openrouter' }) });
+        const data = await response.json();
+        if (!response.ok || !Array.isArray(data?.data)) throw new Error('Catalog unavailable');
+        const ids = [...new Set(data.data.map(value => value?.id).filter(value => typeof value === 'string' && /^[A-Za-z0-9_.:/-]{1,120}$/.test(value)))].sort().slice(0, 5000);
+        if (!ids.length) throw new Error('Catalog empty');
+        modelList.replaceChildren();
+        for (const id of ids) { const option = el('option'); option.value = id; modelList.append(option); }
+        catalogNote.textContent = `Loaded ${ids.length.toLocaleString()} model IDs. You can still enter an OpenRouter model ID directly. No generation request was made.`;
+    } catch { catalogNote.textContent = 'Model IDs could not be loaded. You can still enter an OpenRouter model ID directly.'; }
+    finally { catalogLoading = false; refreshControls(); }
+}
 function mount() {
     if (mounted) return; mounted = true;
     try { extension_settings[KEY] = getSettings(); } catch { extension_settings[KEY] = { ...DEFAULTS }; }
     dialog = el('dialog'); dialog.id = 'story-builder-dialog';
     const top = el('div', undefined, 'sb-top'); top.append(el('h2', 'Story Builder'), el('span', `v${VERSION}`, 'sb-note')); button('Close', () => dialog.close(), top);
-    const description = el('p', 'Send a new prompt or save an edited prompt and choose Regenerate to establish the starting state, plan, write and check each section, independently review, revise, and deliver the finished story in chat.');
+    const description = el('p', 'Paste your prompt in the chat box, choose Generation: Story Builder beside it, then Send. To replace a reply, save your edited prompt and choose Regenerate. Standard mode keeps your usual SillyTavern generation.');
     const notice = el('p', 'Planning and writing use your OpenRouter connection and make multiple paid requests. Closing this panel keeps work running. Pause stops the current request. Refreshing or closing this browser tab loses the staged job, so download it first.', 'sb-note');
-    const preferences = el('details'); preferences.append(el('summary', 'Models and story targets'));
-    const fields = el('div', undefined, 'sb-fields');
+    const preferences = el('section', undefined, 'sb-easy-settings'); preferences.append(el('h3', 'Story settings'));
+    const advanced = el('details', undefined, 'sb-advanced-settings'); advanced.append(el('summary', 'Advanced settings and writing styles'));
+    const fields = el('div', undefined, 'sb-fields'), advancedFields = el('div', undefined, 'sb-fields');
     const values = getSettings();
     for (const [key, labelText, numeric] of [
         ['writerModel', 'Writer model — blank uses your current model', false],
         ['plannerModel', 'Planner model', false],
-        ['reviewerModel', 'Reviewer and revision model', false],
+        ['reviewerModel', 'Reviewer model', false],
+        ['continuityModel', 'Continuity checks model — blank uses stage defaults', false],
+        ['revisionModel', 'Revision model — blank uses reviewer', false],
         ['wordMin', 'Minimum story words', true], ['wordMax', 'Maximum story words', true],
         ['paragraphMin', 'Minimum paragraphs', true], ['paragraphMax', 'Maximum paragraphs', true],
         ['sectionCount', 'Number of sections', true], ['maxRetries', 'Automatic retries per section', true],
@@ -654,23 +790,43 @@ function mount() {
         ['spendLimitUsd', 'Estimated story spending limit in USD (0 disables)', true],
     ]) {
         const label = el('label', labelText), input = el('input'); input.type = numeric ? 'number' : 'text'; input.className = 'text_pole'; input.value = values[key] ?? '';
+        input.id = `story-builder-setting-${key}`;
+        if (!numeric) input.setAttribute('list', 'story-builder-model-catalog');
         if (numeric) { input.step = '1'; input.min = ['maxRetries', 'revisionCycles'].includes(key) ? '0' : '1'; }
         if (key === 'spendLimitUsd') { input.step = '0.01'; input.min = '0'; input.max = '1000'; input.addEventListener('change', refreshControls); }
         if (key === 'maxRevisionPassages') input.max = '6';
         if (key === 'writerModel') input.placeholder = 'Use current writing model';
-        settingsFields.push({ input, key, numeric }); label.append(input); fields.append(label);
+        settingsFields.push({ input, key, numeric }); label.append(input);
+        (['writerModel', 'wordMin', 'wordMax', 'spendLimitUsd'].includes(key) ? fields : advancedFields).append(label);
     }
     const strictLabel = el('label', undefined, 'sb-check'), strict = el('input'); strict.type = 'checkbox'; strict.checked = values.strictParagraphs === true;
     strictLabel.append(strict, document.createTextNode(' Require paragraph range')); settingsFields.push({ input: strict, key: 'strictParagraphs', checkbox: true });
-    preferences.append(fields, strictLabel);
+    const easyActions = el('div', undefined, 'sb-actions');
+    preferenceButtons.push(button('Use 10,000–12,000 words', () => {
+        if (job || controller || chatRunController || applying) return;
+        for (const [key, value] of [['wordMin', 10000], ['wordMax', 12000], ['sectionCount', 4]]) settingsFields.find(field => field.key === key).input.value = value;
+        say('Selected 10,000–12,000 words in four sections. Save preferences or prepare your next story to use these targets.');
+    }, easyActions));
+    preferenceButtons.push(button('Save preferences', () => {
+        if (job || controller || chatRunController || applying) return;
+        try { storeSettings(); say('Preferences saved for your next story. Paste your prompt in chat, then Send with Story Builder selected.'); }
+        catch (error) { say(error.message || 'Check the story preferences.'); }
+        refreshControls();
+    }, easyActions));
+    preferences.append(fields, easyActions, el('p', 'Start with these targets and your writer model. Extra styles and specialist requests are off unless you enable them below.', 'sb-note'));
+    advanced.append(advancedFields, strictLabel, el('p', 'With the continuity model blank, starting notes use the planner and section checks use the reviewer. With the revision model blank, revisions use the reviewer.', 'sb-note'));
     for (const [key, labelText] of [['continuityEnabled', 'Prepare starting state and check continuity before keeping each section'], ['editorialEnabled', 'Run two independent reviews and targeted revisions'], ['updateTracker', 'Update zTracker after adding the final reviewed story']]) {
-        const label = el('label', undefined, 'sb-check'), input = el('input'); input.type = 'checkbox'; input.checked = values[key]; label.append(input, document.createTextNode(` ${labelText}`)); settingsFields.push({ input, key, checkbox: true }); preferences.append(label);
+        const label = el('label', undefined, 'sb-check'), input = el('input'); input.type = 'checkbox'; input.checked = values[key]; input.id = `story-builder-setting-${key}`; label.append(input, document.createTextNode(` ${labelText}`)); settingsFields.push({ input, key, checkbox: true }); advanced.append(label);
     }
-    preferences.append(el('p', 'Reviews examine the full draft and original context. Each round makes up to your chosen number of targeted edits, then both reviewers check the result. Any remaining findings stay visible.', 'sb-note'),
+    advanced.append(el('p', 'Reviews examine the full draft and original context. Each round makes up to your chosen number of targeted edits, then the enabled reviewers check the result. Any remaining findings stay visible.', 'sb-note'),
         el('p', 'A positive spending limit checks estimated input and maximum output cost before each model request. It is an estimate, not a guaranteed provider billing ceiling. Cancelled or failed requests may retain an unknown-charge allowance. Automatic zTracker updates are off because their requests cannot share this budget.', 'sb-note'),
         el('p', 'The limit is fixed for each staged job. If a request would exceed it, download completed work before discarding the job and choosing a different limit for a new job. Resume keeps the same limit and recorded spending.', 'sb-note'),
         el('p', 'Each parallel review is checked separately; a funded review can finish even if its peer is blocked.', 'sb-note'),
         el('p', 'Flexible paragraph counts preserve natural dialogue. Your active writing preset remains in use without changing your chat connection.', 'sb-note'));
+    modelList = el('datalist'); modelList.id = 'story-builder-model-catalog';
+    catalogNote = el('p', 'All model fields accept an OpenRouter model ID. Loading the catalog is optional and does not generate text.', 'sb-note');
+    catalogButton = button('Load available model IDs', () => void loadModelCatalog(), advanced);
+    advanced.append(catalogNote, modelList); mountWritingStyles(advanced, values); preferences.append(advanced);
     const prepareActions = el('div', undefined, 'sb-actions'); prepareButton = button('Prepare outline from current prompt', () => void prepare(), prepareActions, 'sb-primary'); discardButton = button('Discard this staged job', discard, prepareActions);
     const setupHelp = el('p', 'With automatic chat workflow on, Send and the Regenerate action run every stage. Confirm message edits before choosing Regenerate; the previous reply stays available until the finished replacement is saved as a new swipe. The buttons below also let you work through individual stages. Preparing runs your normal preset macros.', 'sb-note');
     counts = el('div', undefined, 'sb-counts'); usage = el('div', undefined, 'sb-note sb-usage'); status = el('div', 'Ready. Start by preparing an outline.', 'sb-status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
@@ -688,10 +844,7 @@ function mount() {
     dialog.append(top, description, notice, preferences, setupHelp, prepareActions, counts, usage, status, notices, planControls); document.body.append(dialog);
     const panel = el('div'); panel.id = 'story-builder-settings'; panel.append(el('strong', 'Story Builder'), el('span', ` · v${VERSION}`, 'sb-note'), el('p', 'Plan, write, review, revise, and deliver one finished story from your prompt.', 'sb-note'));
     const chatLabel = el('label', undefined, 'sb-check'); chatToggle = el('input'); chatToggle.type = 'checkbox'; chatToggle.checked = values.chatWorkflowEnabled;
-    chatToggle.addEventListener('change', () => {
-        extension_settings[KEY] = { ...getSettings(), chatWorkflowEnabled: chatToggle.checked === true };
-        ctx().saveSettingsDebounced();
-    });
+    chatToggle.addEventListener('change', () => setGenerationMode(chatToggle.checked === true));
     chatLabel.append(chatToggle, document.createTextNode(' Run Story Builder on Send and Regenerate')); panel.append(chatLabel);
     panelStatus = el('div', 'Ready. No source has been loaded.', 'sb-note'); panel.append(panelStatus); button('Open Story Builder', open, panel);
     (document.getElementById('extensions_settings2') || document.getElementById('extensions_settings'))?.append(panel);
@@ -699,8 +852,17 @@ function mount() {
     menu.dataset.ntTopbarAction = 'story-builder:open'; menu.dataset.ntTopbarLabel = 'Story Builder'; menu.dataset.ntTopbarIcon = 'fa-solid fa-book-open';
     document.getElementById('extensionsMenu')?.append(menu);
     const chatParent = document.getElementById('sheld') || document.body;
+    const modeBar = el('div', undefined, 'story-builder-mode-bar'); modeBar.id = 'story-builder-mode-bar';
+    modeButton = button('Generation: Standard', () => setGenerationMode(!getSettings().chatWorkflowEnabled), modeBar, 'story-builder-mode-toggle');
+    modeButton.id = 'story-builder-mode-toggle'; modeButton.setAttribute('aria-pressed', String(values.chatWorkflowEnabled));
+    modeButton.dataset.ntTopbarAction = 'story-builder:mode'; modeButton.dataset.ntTopbarLabel = 'Generation mode'; modeButton.dataset.ntTopbarIcon = 'fa-solid fa-wand-magic-sparkles';
+    button('Story settings', open, modeBar, 'story-builder-mode-settings');
+    modeNote = el('span', undefined, 'story-builder-mode-note'); modeBar.append(modeNote);
+    const nativeComposer = document.getElementById('send_form');
+    if (nativeComposer) nativeComposer.insertBefore(modeBar, nativeComposer.firstChild);
+    else (document.getElementById('form_sheld') || chatParent).append(modeBar);
     chatProgress = createChatProgress({ document, version: VERSION, parent: chatParent, onPause: pauseWorkflow,
-        onResume: () => automaticStory(), onDetails: open, onDownload: download, onDownloadActivity: downloadActivity,
+        onResume: () => { setGenerationMode(true); return automaticStory(); }, onDetails: open, onDownload: download, onDownloadActivity: downloadActivity,
         onDismiss: () => { automaticVisible = false; refreshChatProgress(); } });
     const composer = document.getElementById('form_sheld');
     if (composer?.parentNode === chatParent) chatParent.insertBefore(chatProgress.element, composer);

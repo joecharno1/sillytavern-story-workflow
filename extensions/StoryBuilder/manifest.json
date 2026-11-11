@@ -7,7 +7,7 @@
   "generate_interceptor": "StoryBuilder_Intercept",
   "css": "style.css",
   "author": "Local writing tools",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "minimum_client_version": "1.19.0",
   "description": "Plan, write, check continuity, review and revise stories in chat, with configurable models and an estimated spending limit."
 }

@@ -127,7 +127,7 @@ export function buildInitialStateRequest(job) {
     const messages = sourceMessages(job);
     const payload = { sourceMessages: structuredClone(messages), latestBriefLocation };
     if (job.plan != null) payload.existingOutlineAsFutureConstraints = structuredClone(job.plan);
-    return body(job, job.settings?.plannerModel, INITIAL_SYSTEM, payload);
+    return body(job, job.settings?.continuityModel || job.settings?.plannerModel, INITIAL_SYSTEM, payload);
 }
 
 export function parseInitialState(raw, job) {
@@ -188,7 +188,7 @@ export function buildContinuityCheckRequest(job, candidate) {
         plannedStoryAsFutureConstraints: job.plan == null ? null : structuredClone(job.plan),
         candidate: { id: candidate.id, text: candidate.text },
     };
-    return body(job, job.settings?.reviewerModel, CHECK_SYSTEM, payload);
+    return body(job, job.settings?.continuityModel || job.settings?.reviewerModel, CHECK_SYSTEM, payload);
 }
 
 function normalizeReportFields(value) {

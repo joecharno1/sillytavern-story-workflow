@@ -3,6 +3,8 @@ import { analyzeDraft, fingerprint } from './story-counts.js';
 import { parseSection } from './builder-core.js';
 
 const FOCUSES = ['continuity', 'prose'];
+const SPECIALIST_IDS = ['dialogue', 'physical', 'character', 'atmosphere'];
+const MODEL = /^[a-zA-Z0-9_.:/-]{1,120}$/;
 const LIMITS = Object.freeze({ maxCycles: 2, maxGroupsPerCycle: 6, maxParagraphsPerGroup: 12, maxWordsPerGroup: 2500 });
 const clone = value => structuredClone(value);
 const story = job => job.sections.map(section => section.text).join('\n\n');
@@ -32,6 +34,42 @@ function targets(job) {
     const result = {};
     for (const key of ['wordMin', 'wordMax', 'paragraphMin', 'paragraphMax']) result[key] = job.settings[key];
     return result;
+}
+
+function editorialConfiguration(settings) {
+    if (settings.revisionModel !== undefined && typeof settings.revisionModel !== 'string') throw new Error('The editorial model or writing guidance configuration is invalid.');
+    const model = settings.model ?? '', revisionModel = settings.revisionModel || model;
+    const writingGuidance = settings.writingGuidance ?? '', specialists = settings.specialists ?? [];
+    if ([model, revisionModel].some(value => typeof value !== 'string' || value && !MODEL.test(value))
+        || typeof writingGuidance !== 'string' || writingGuidance.length > 40000
+        || !Array.isArray(specialists) || specialists.length > 4) throw new Error('The editorial model or writing guidance configuration is invalid.');
+    const seen = new Set();
+    for (const item of specialists) {
+        if (!item || !SPECIALIST_IDS.includes(item.id) || seen.has(item.id)
+            || typeof item.label !== 'string' || !item.label.trim() || item.label.length > 80
+            || typeof item.instruction !== 'string' || !item.instruction.trim() || item.instruction.length > 8500
+            || typeof item.model !== 'string' || !MODEL.test(item.model)) throw new Error('The specialist review configuration is invalid.');
+        seen.add(item.id);
+    }
+    return { model, revisionModel, maxOutput: settings.maxOutput ?? 8192, writingGuidance,
+        specialists: SPECIALIST_IDS.flatMap(id => {
+            const item = specialists.find(value => value.id === id);
+            return item ? [{ id, label: item.label, instruction: item.instruction, model: item.model }] : [];
+        }) };
+}
+
+function reviewSettings(settings, focus) {
+    const specialist = settings.specialists.find(item => item.id === focus);
+    return { ...settings, model: specialist?.model || settings.model };
+}
+
+function revisionSettings(settings, group) {
+    // One local patch has one owner. Mixed findings stay with the general
+    // revision model so overlapping prose is not rewritten by rival specialists.
+    const focuses = [...new Set(group.issues.map(issue => issue.focus))];
+    const specialist = focuses.length === 1 && settings.specialists.find(item => item.id === focuses[0]);
+    const model = specialist?.model || settings.revisionModel || settings.model;
+    return { ...settings, model, revisionModel: model, ...(specialist ? { specialistFocus: specialist.id } : {}) };
 }
 
 function formatIssues(text) {
@@ -64,7 +102,7 @@ function normalizedReport(report, paragraphCount) {
 }
 
 function collectIssues(cycle) {
-    return FOCUSES.flatMap(focus => (cycle.reviews[focus]?.result?.issues || []).map((issue, index) => ({
+    return (cycle.focuses || FOCUSES).flatMap(focus => (cycle.reviews[focus]?.result?.issues || []).map((issue, index) => ({
         ...clone(issue), id: `c${cycle.index}:${focus}:${index}`, cycle: cycle.index, focus,
         paragraphs: [...new Set(issue.paragraphs)].sort((a, b) => a - b),
     })));
@@ -146,17 +184,17 @@ function revisionProblem(result, text, group, snapshot, limits, job) {
     return '';
 }
 
-function newCycle(index, text, textVersion) {
-    return { index, text, textVersion, reviews: {}, groups: null, nextGroup: 0, deferred: [] };
+function newCycle(index, text, textVersion, focuses = FOCUSES) {
+    return { index, text, textVersion, focuses: [...focuses], reviews: {}, groups: null, nextGroup: 0, deferred: [] };
 }
 
-function initialState(job, limits) {
+function initialState(job, limits, configuration) {
     const originalText = story(job);
     return {
         version: 1, originalText, text: originalText, textVersion: 0,
         sourceFingerprint: sourceFingerprint(job), snapshotStamp: snapshotStamp(job), targets: targets(job), strictParagraphs: !!job.settings.strictParagraphs,
-        limits, status: 'new', error: '', phase: 'review', cycle: 0,
-        cycles: [newCycle(0, originalText, 0)], reports: [], changes: [],
+        limits, configuration: clone(configuration), status: 'new', error: '', phase: 'review', cycle: 0,
+        cycles: [newCycle(0, originalText, 0, [...FOCUSES, ...configuration.specialists.map(item => item.id)])], reports: [], changes: [],
         versions: [{ version: 0, text: originalText, cycle: 0, group: null }],
         unresolved: [], analysis: null, targetChecks: { wordTargetMet: false, paragraphTargetMet: false, formatValid: false },
     };
@@ -191,13 +229,19 @@ export async function runEditorialWorkflow(job, services, transport = {}, option
     for (const key of ['createManuscriptSnapshot', 'reviewManuscript', 'reviseManuscript']) if (typeof services?.[key] !== 'function') throw new Error(`The editorial service is missing ${key}.`);
     const limits = boundedOptions(options, job.editorial?.limits);
     const t = { ...transport, signal: options.signal ?? transport.signal };
-    const settings = { ...targets(job), ...(options.settings || {}) };
+    const configuration = editorialConfiguration(options.settings || {});
+    const settings = { ...targets(job), ...(options.settings || {}), ...clone(configuration) };
+    const focuses = [...FOCUSES, ...configuration.specialists.map(item => item.id)];
     const notify = async value => { if (options.onProgress) await options.onProgress(value); };
     let state = job.editorial;
     const guard = async () => {
         if (t.signal?.aborted) throw new DOMException('Editorial work paused. Completed writing is preserved.', 'AbortError');
         if (t.assertCurrent && await t.assertCurrent() === false) throw new Error('The source changed. Editorial work stopped without changing the completed writing.');
         if (t.isCurrent && !await t.isCurrent(job.source.snapshot)) throw new Error('The source changed. Editorial work stopped without changing the completed writing.');
+        if (JSON.stringify(editorialConfiguration(options.settings || {})) !== JSON.stringify(configuration)
+            || state?.configuration && JSON.stringify(state.configuration) !== JSON.stringify(configuration)) {
+            throw new Error('The editorial models or writing guidance changed. Start a new editorial pass to use different preferences.');
+        }
         if (state && (story(job) !== state.originalText || snapshotIdentities.has(state) && snapshotIdentities.get(state) !== job.source.snapshot
             || snapshotStamp(job) !== state.snapshotStamp || sourceFingerprint(job) !== state.sourceFingerprint
             || JSON.stringify(targets(job)) !== JSON.stringify(state.targets) || !!job.settings.strictParagraphs !== state.strictParagraphs)) {
@@ -208,9 +252,17 @@ export async function runEditorialWorkflow(job, services, transport = {}, option
     if (state && state.version !== 1) throw new Error('This editorial checkpoint is not supported.');
     job._busy = true;
     try {
-        if (!state) state = job.editorial = initialState(job, limits);
+        if (!state) state = job.editorial = initialState(job, limits, configuration);
         if (!snapshotIdentities.has(state)) snapshotIdentities.set(state, job.source.snapshot);
         await guard();
+        if (!state.configuration) {
+            // Older checkpoints had only the two general reviewers. They may
+            // resume unchanged, but must not gain unrequested paid specialists.
+            if (configuration.specialists.length || configuration.writingGuidance || configuration.revisionModel !== configuration.model) {
+                throw new Error('This older editorial checkpoint cannot add new specialist or writing preferences. Start a new editorial pass.');
+            }
+            state.configuration = clone(configuration);
+        }
         if (state.status === 'ready') return state;
         state.error = '';
         // A pause or progress-handler failure after validation must be resumable too.
@@ -221,15 +273,17 @@ export async function runEditorialWorkflow(job, services, transport = {}, option
             const cycle = state.cycles[state.cycle];
             if (state.phase === 'review') {
                 state.status = 'reviewing';
-                await notify({ stage: 'editorial_review', cycle: cycle.index + 1, message: 'Independent reviewers are checking continuity and prose.' });
+                await notify({ stage: 'editorial_review', cycle: cycle.index + 1, message: configuration.specialists.length
+                    ? 'Independent reviewers are checking continuity, prose, and the selected specialist aspects.'
+                    : 'Independent reviewers are checking continuity and prose.' });
                 await guard();
-                const settled = await Promise.allSettled(FOCUSES.map(async focus => {
+                const settled = await Promise.allSettled(focuses.map(async focus => {
                     const entry = cycle.reviews[focus] ||= { state: 'pending', result: null };
                     if (entry.state === 'complete') return;
                     await guard();
                     const snapshot = snapshotFor(cycle.text, job, services, settings);
                     if (entry.result === null) {
-                        const received = await services.reviewManuscript(snapshot, focus, settings, t);
+                        const received = await services.reviewManuscript(snapshot, focus, reviewSettings(settings, focus), t);
                         // Receipt cache only: no manuscript mutation or trusted report until guard passes.
                         entry.result = clone(received); entry.state = 'received';
                     }
@@ -245,9 +299,10 @@ export async function runEditorialWorkflow(job, services, transport = {}, option
                         state.reports.push({ cycle: cycle.index, focus, textVersion: cycle.textVersion, report: clone(entry.result) });
                     }
                     await guard();
-                    await notify({ stage: 'editorial_report', cycle: cycle.index + 1, focus, message: `The ${focus} review is saved.` });
+                    const label = configuration.specialists.find(item => item.id === focus)?.label || focus;
+                    await notify({ stage: 'editorial_report', cycle: cycle.index + 1, focus, message: `The ${label} review is saved.` });
                 }));
-                // Always await both reviewers, even if one rejects or the caller pauses.
+                // Always await every reviewer, even if one rejects or the caller pauses.
                 const failures = settled.filter(result => result.status === 'rejected');
                 await guard();
                 if (failures.length) throw failures[0].reason;
@@ -276,7 +331,7 @@ export async function runEditorialWorkflow(job, services, transport = {}, option
                         paragraphs: ids, message: 'Revising a bounded passage while preserving the rest of the manuscript.' });
                     await guard();
                     if (group.result === null) {
-                        const received = await services.reviseManuscript(snapshot, ids, revisionInstruction(group), settings, t);
+                        const received = await services.reviseManuscript(snapshot, ids, revisionInstruction(group), revisionSettings(settings, group), t);
                         group.result = clone({ updated: received?.updated, replacement: received?.replacement }); group.state = 'received';
                     }
                     await guard();
@@ -306,7 +361,7 @@ export async function runEditorialWorkflow(job, services, transport = {}, option
                 await guard();
                 if (state.text === cycle.text) { state.phase = 'validate'; continue; }
                 state.cycle++;
-                state.cycles.push(newCycle(state.cycle, state.text, state.textVersion));
+                state.cycles.push(newCycle(state.cycle, state.text, state.textVersion, focuses));
                 state.phase = 'review';
             } else if (state.phase === 'validate') {
                 const analysis = analyzeDraft(state.text, state.targets);

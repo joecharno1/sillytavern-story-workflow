@@ -5,6 +5,7 @@ export const PUBLIC_BUILDER_DEFAULTS = Object.freeze({
     sectionCount: 4, maxRetries: 1, editorialEnabled: true, continuityEnabled: true,
     revisionCycles: 1, maxRevisionPassages: 2, spendLimitUsd: 1,
     chatWorkflowEnabled: false, updateTracker: false,
+    continuityModel: '', revisionModel: '', tuningEnabled: false,
 });
 export const PUBLIC_REVIEW_DEFAULTS = Object.freeze({
     model: 'aion-labs/aion-3.5-mini', enabled: true, autoReview: false,

@@ -7,6 +7,7 @@ import { createSpendLedger, prepareReservation, settleRequest, failRequest, canc
 import { createChatInterceptor } from '../../extensions/StoryBuilder/chat-interceptor.js';
 import { runChatWorkflow } from '../../extensions/StoryBuilder/chat-runner.js';
 import { createRegenerateAction, storyTicketCurrent } from '../../extensions/StoryBuilder/regenerate-action.js';
+import { WRITING_ASPECTS, WRITING_PRESETS, normalizePresetLibrary, buildWritingGuidance, specialistPasses } from '../../extensions/StoryBuilder/writing-tuning.js';
 
 const sourceCode = (await fs.readFile(new URL('../../extensions/StoryBuilder/index.js', import.meta.url), 'utf8')).replace(/^import .+?;\s*$/gm, '');
 
@@ -14,7 +15,9 @@ class Node {
     constructor(tag) { this.tagName = tag; this.children = []; this.listeners = {}; this.dataset = {}; this.attributes = {}; this._text = ''; this.open = false; this.disabled = false; this.hidden = false; }
     set textContent(text) { this._text = String(text); this.children = []; }
     get textContent() { return this._text + this.children.map(n => typeof n === 'string' ? n : n.textContent).join(''); }
-    append(...nodes) { this.children.push(...nodes); }
+    append(...nodes) { this.children.push(...nodes); for (const node of nodes) if (typeof node === 'object') node.parentNode = this; }
+    insertBefore(node, reference) { const index = this.children.indexOf(reference); this.children.splice(index < 0 ? this.children.length : index, 0, node); node.parentNode = this; }
+    get firstChild() { return this.children[0] || null; }
     replaceChildren(...nodes) { this._text = ''; this.children = [...nodes]; }
     addEventListener(name, fn) { (this.listeners[name] ||= []).push(fn); }
     setAttribute(name, value) { this.attributes[name] = value; }
@@ -35,14 +38,21 @@ function budgetFetcher(generate, metadata = async () => ({ token_count: 10 })) {
     };
 }
 async function activityExport(f) { f.action('download-activity').click(); return JSON.parse(await f.metrics.downloadBlob.text()); }
+const field = (f, id) => f.nodes.find(node => node.id === id);
+const change = (node, value, event = 'change') => { if (node.type === 'checkbox') node.checked = value; else node.value = value; for (const callback of node.listeners[event] || []) callback({ target: node }); };
 
-function fixture({ run, plan: customPlan, fetcher, settings = {}, applyReturn, editorial, track, workflow = false, automatic = false, apply: customApply, capture: customCapture } = {}) {
+function fixture({ run, plan: customPlan, fetcher, settings = {}, composer = false, applyReturn, editorial, track, workflow = false, automatic = false, apply: customApply, capture: customCapture } = {}) {
     if (workflow && !applyReturn) applyReturn = { index: 2, swipeId: 1, saveRequested: true, rendered: true };
     const nodes = [], body = new Node('body'), documentListeners = {};
     const document = { body, createElement(tag) { const n = new Node(tag); nodes.push(n); return n; }, createTextNode(text) { return String(text); }, getElementById(id) { return nodes.find(n => n.id === id) || null; },
         addEventListener(name, fn, capture) { (documentListeners[name] ||= []).push({ fn, capture }); },
         querySelector() { return metrics.unsavedEdit ? {} : null; } };
     for (const id of ['extensions_settings2', 'extensionsMenu']) { const n = document.createElement('div'); n.id = id; body.append(n); }
+    if (composer) {
+        const sheld = document.createElement('div'), wrapper = document.createElement('div'), form = document.createElement('form'), text = document.createElement('textarea');
+        sheld.id = 'sheld'; wrapper.id = 'form_sheld'; form.id = 'send_form'; text.id = 'send_textarea';
+        form.append(text); wrapper.append(form); sheld.append(wrapper); body.append(sheld);
+    }
     const listeners = {}, eventSource = { on(name, fn) { (listeners[name] ||= []).push(fn); }, emit(name, ...args) { for (const fn of listeners[name] || []) fn(...args); } };
     const event_types = Object.fromEntries(['APP_READY', 'CHAT_CHANGED', 'MESSAGE_EDITED', 'MESSAGE_DELETED', 'MESSAGE_SWIPED', 'MESSAGE_SWIPE_DELETED', 'MESSAGE_SENT', 'OAI_PRESET_CHANGED_AFTER', 'CHATCOMPLETION_MODEL_CHANGED', 'CHATCOMPLETION_SOURCE_CHANGED', 'CONNECTION_PROFILE_LOADED', 'CHARACTER_EDITED', 'WORLDINFO_UPDATED', 'WORLDINFO_SETTINGS_UPDATED', 'PERSONA_CHANGED', 'PERSONA_UPDATED', 'PERSONA_RENAMED', 'PERSONA_DELETED', 'GENERATION_STARTED', 'GENERATION_STOPPED'].map(x => [x, x]));
     const metrics = { capture: 0, plan: 0, run: 0, apply: 0, saved: 0, reads: 0, sourceCurrent: true, generating: false, now: 1700000000000, fetchCalls: 0 };
@@ -53,7 +63,7 @@ function fixture({ run, plan: customPlan, fetcher, settings = {}, applyReturn, e
     extension_settings.StoryBuilder = { ...extension_settings.StoryBuilder, ...settings };
     const context = { chatId: 'synthetic-chat', characterId: 0, groupId: null, chat: [], getCurrentChatId: () => context.chatId,
         getRequestHeaders: () => ({ 'Content-Type': 'application/json' }), saveSettingsDebounced: () => metrics.saved++ };
-    const globals = {};
+    const globals = { crypto: globalThis.crypto };
     const source = { snapshot: { fixture: true }, latestBrief: 'Carry the sealed ledger to the harbor.', model: 'fixture/current-model', messages: [{ role: 'user', content: 'Carry the sealed ledger to the harbor.' }], requestTemplate: {}, contextLimit: 131072, responseLimit: 16384 };
     const createJob = (s, settings) => ({ id: 'fixture', source: s, settings, plan: null, sections: [], status: 'new' });
     const planJob = async (job, transport, options) => { metrics.plan++; assert.equal(typeof transport.isCurrent, 'function'); if (customPlan) return customPlan(job, transport, options); job.plan = { requiredBeats: [{ id: 'b1', briefQuote: source.latestBrief }], fixedFacts: ['The ledger remains sealed until arrival.'], finalRequirements: ['Reach the harbor.'], sections: Array.from({ length: job.settings.sectionCount }, (_, i) => ({ id: i + 1, title: `Journey ${i + 1}`, beatIds: i ? [] : ['b1'], startState: 'Continue the journey.', endState: 'Reach the next landmark.', direction: '' })) }; job.status = 'ready'; };
@@ -69,6 +79,7 @@ function fixture({ run, plan: customPlan, fetcher, settings = {}, applyReturn, e
     };
     const deps = { document, extension_settings, eventSource, event_types, isGenerating: () => metrics.generating, DEFAULTS, normalizeSettings, createJob, planJob, runJob, assembledStory, totals, updatePlan(job, plan) { job.plan = plan; }, captureSource: async options => { metrics.capture++; if (customCapture) await customCapture(options); return source; }, snapshotCurrent: () => { metrics.reads++; return metrics.sourceCurrent; }, applyResult: async (_snapshot, text, options) => { metrics.apply++; metrics.appliedText = text; metrics.appliedOptions = options; if (customApply) await customApply(); metrics.sourceCurrent = false; return applyReturn; }, URL: { createObjectURL(blob) { metrics.downloadBlob = blob; return 'blob:synthetic-download'; }, revokeObjectURL() {} }, setTimeout: callback => { callback(); return 0; }, SillyTavern: { getContext: () => context }, globalThis: globals,
         createChatProgress, formatSpendSummary, createSpendLedger, prepareReservation, settleRequest, failRequest, cancelReservation, spendSummary,
+        WRITING_ASPECTS, WRITING_PRESETS, normalizePresetLibrary, buildWritingGuidance, specialistPasses,
         createChatInterceptor: options => createChatInterceptor({ ...options, schedule: callback => setImmediate(callback) }), runChatWorkflow,
         bindChatProgressLayout: () => ({ refresh() {} }), createRegenerateAction, storyTicketCurrent };
     Object.assign(deps, {
@@ -106,6 +117,106 @@ function fixture({ run, plan: customPlan, fetcher, settings = {}, applyReturn, e
         action: name => nodes.find(n => n.className === `story-builder-progress-${name}`),
         byText: text => nodes.find(n => n.tagName === 'button' && n.textContent === text), status: () => nodes.find(n => n.className === 'sb-status').textContent, preview: () => nodes.find(n => n.className === 'sb-preview'), dialog: () => nodes.find(n => n.id === 'story-builder-dialog') };
 }
+
+test('composer mode switch is visible, synchronized, and never sends a message itself', async () => {
+    const f = fixture({ composer: true });
+    const mode = field(f, 'story-builder-mode-toggle'), form = field(f, 'send_form'), bar = field(f, 'story-builder-mode-bar');
+    assert.equal(form.firstChild, bar); assert.equal(mode.type, 'button'); assert.equal(mode.hidden, false);
+    assert.equal(mode.textContent, 'Generation: Standard'); assert.equal(mode.attributes['aria-pressed'], 'false');
+    const preference = f.nodes.find(node => node.tagName === 'label' && node.textContent.includes('Run Story Builder on Send and Regenerate')).children[0];
+    mode.click(); await settle();
+    assert.equal(mode.textContent, 'Generation: Story Builder'); assert.equal(mode.attributes['aria-pressed'], 'true'); assert.equal(preference.checked, true);
+    assert.equal(f.metrics.capture, 0); assert.equal(f.metrics.fetchCalls, 0); assert.equal(f.context.chat.length, 0);
+    change(preference, false); assert.equal(mode.textContent, 'Generation: Standard'); assert.equal(mode.attributes['aria-pressed'], 'false');
+    f.send(); await settle(); assert.equal(f.metrics.capture, 0); assert.equal(f.metrics.nativeAbort, undefined);
+    f.regenerate(); await settle(); assert.equal(f.metrics.nativeRegenerate, 1); assert.equal(f.metrics.run, 0);
+});
+
+test('switching to Standard pauses current work without deleting it and Resume reselects Builder', async () => {
+    let captured, runs = 0;
+    const f = fixture({ automatic: true, workflow: true, run: async (job, transport) => {
+        captured = job; runs++; job.sections = [{ id: 1, text: 'Kept synthetic section.', words: 1500, paragraphs: 18 }];
+        if (runs === 1) await new Promise((_resolve, reject) => transport.signal.addEventListener('abort', () => { job.status = 'paused'; reject(new DOMException('Paused', 'AbortError')); }, { once: true }));
+        else job.status = 'paused';
+    } });
+    f.send(); await settle(); const mode = field(f, 'story-builder-mode-toggle');
+    assert.equal(mode.disabled, false); mode.click(); await settle();
+    assert.equal(f.extension_settings.StoryBuilder.chatWorkflowEnabled, false); assert.equal(captured.sections[0].text, 'Kept synthetic section.');
+    assert.equal(f.metrics.run, 1); assert.equal(f.metrics.apply, 0); assert.equal(f.metrics.nativeRegenerate || 0, 0);
+    assert.equal(f.action('download').disabled, false); assert.equal(f.action('resume').disabled, false);
+    f.action('resume').click(); await settle();
+    assert.equal(mode.textContent, 'Generation: Story Builder'); assert.equal(f.metrics.capture, 1); assert.equal(f.metrics.plan, 1); assert.equal(f.metrics.run, 2);
+    mode.click(); f.regenerate(); await settle(); assert.equal(f.metrics.nativeRegenerate, 1); assert.equal(f.metrics.run, 2);
+});
+
+test('switching modes cannot make an old staged source current after a chat change', async () => {
+    const f = fixture({ automatic: true, run: async job => { job.sections = [{ id: 1, text: 'Preserved section.', words: 1500, paragraphs: 18 }]; job.status = 'paused'; } });
+    f.send(); await settle(); const mode = field(f, 'story-builder-mode-toggle'); mode.click();
+    f.metrics.sourceCurrent = false; f.eventSource.emit('CHAT_CHANGED'); mode.click();
+    assert.equal(f.action('resume').disabled, true); assert.equal(f.byText('Download partial plain-text story').disabled, false); assert.equal(f.metrics.capture, 1);
+    assert.match(field(f, 'story-builder-mode-bar').textContent, /changed chat can prevent resuming/);
+});
+
+test('simple targets save locally while advanced extras remain off and collapsed', async () => {
+    const f = fixture();
+    const advanced = f.nodes.find(node => node.className === 'sb-advanced-settings');
+    assert.equal(advanced.open, false); assert.equal(field(f, 'story-builder-setting-tuningEnabled').checked, false);
+    f.byText('Use 10,000–12,000 words').click(); f.byText('Save preferences').click(); await settle();
+    const settings = f.extension_settings.StoryBuilder;
+    assert.equal(settings.wordMin, 10000); assert.equal(settings.wordMax, 12000); assert.equal(settings.sectionCount, 4);
+    assert.equal(settings.tuningEnabled, false); assert.equal(settings.writerModel, DEFAULTS.writerModel); assert.equal(settings.plannerModel, DEFAULTS.plannerModel);
+    assert.equal(f.metrics.fetchCalls, 0); assert.equal(f.metrics.capture, 0);
+});
+
+test('named style presets save, update, reload, and delete without losing their exact instructions or enabling extras', async () => {
+    const f = fixture(); const preset = field(f, 'story-builder-style-dialogue-preset'), custom = field(f, 'story-builder-style-dialogue-custom'), name = field(f, 'story-builder-style-dialogue-name');
+    const text = '  Prefer concrete exchanges.\nKeep the author’s exact required lines.  ';
+    change(preset, 'natural'); change(custom, text, 'input'); assert.equal(preset.value, 'custom'); name.value = '<script>my style</script>'; f.byText('Save named preset').click();
+    let settings = f.extension_settings.StoryBuilder, saved = settings.writingPresetLibrary.dialogue[0];
+    assert.equal(saved.text, text); assert.equal(saved.name, '<script>my style</script>'); assert.match(saved.id, /^custom-/);
+    assert.equal(settings.tuningEnabled, false); assert.equal(settings.writingStyles.dialogue.preset, saved.id);
+    const option = preset.children.find(node => node.value === saved.id); assert.equal(option.children.length, 0); assert.equal(option.textContent, 'Saved: <script>my style</script>');
+    change(custom, `${text}\nUse purposeful pauses.`, 'input'); f.byText('Save named preset').click();
+    settings = f.extension_settings.StoryBuilder; assert.equal(settings.writingPresetLibrary.dialogue.length, 1); assert.equal(settings.writingPresetLibrary.dialogue[0].id, saved.id);
+    const second = fixture({ settings }); assert.equal(field(second, 'story-builder-style-dialogue-custom').value, `${text}\nUse purposeful pauses.`);
+    change(preset, 'natural'); change(preset, saved.id); assert.equal(custom.value, `${text}\nUse purposeful pauses.`);
+    f.byText('Delete selected preset').click();
+    settings = f.extension_settings.StoryBuilder; assert.equal(settings.writingPresetLibrary.dialogue.length, 0); assert.equal(settings.writingStyles.dialogue.preset, 'custom');
+    assert.equal(settings.writingStyles.dialogue.custom, `${text}\nUse purposeful pauses.`); assert.equal(settings.tuningEnabled, false);
+    assert.equal(f.metrics.fetchCalls, 0); assert.equal(f.metrics.capture, 0);
+});
+
+test('the optional catalog loads only on explicit click and leaves manual model choices untouched', async () => {
+    let calls = 0;
+    const f = fixture({ fetcher: async (url, options) => {
+        calls++; assert.equal(url, '/api/backends/chat-completions/status'); assert.deepEqual(JSON.parse(options.body), { chat_completion_source: 'openrouter' });
+        return { ok: true, json: async () => ({ data: [{ id: 'fixture/a' }, { id: 'fixture/a' }, { id: '<script>bad</script>' }, { id: 'fixture/b' }] }) };
+    } });
+    f.byText('Story settings').click(); assert.equal(calls, 0);
+    field(f, 'story-builder-setting-writerModel').value = 'custom/manual-model';
+    f.byText('Load available model IDs').click(); await settle();
+    assert.equal(calls, 1); assert.deepEqual(field(f, 'story-builder-model-catalog').children.map(node => node.value), ['fixture/a', 'fixture/b']);
+    assert.equal(field(f, 'story-builder-setting-writerModel').value, 'custom/manual-model');
+    f.byText('Save preferences').click(); assert.equal(f.extension_settings.StoryBuilder.writerModel, 'custom/manual-model');
+    assert.equal(f.metrics.capture, 0); assert.equal(f.metrics.run, 0);
+});
+
+test('advanced stage models and selected specialists reach editorial with correctly named report headings', async () => {
+    const f = fixture({ workflow: true, settings: { tuningEnabled: true, revisionModel: 'fixture/reviser', continuityModel: 'fixture/checker',
+        writingStyles: { dialogue: { preset: 'natural', custom: '', model: 'fixture/dialogue' } },
+        writingPresetLibrary: { dialogue: [{ id: 'custom-unused', name: 'Unused', text: 'UNSELECTED LIBRARY TEXT' }] } },
+        editorial: async (job, _transport, options) => {
+            assert.equal(job.settings.continuityModel, 'fixture/checker'); assert.equal(options.settings.revisionModel, 'fixture/reviser');
+            assert.match(options.settings.writingGuidance, /character-specific speech/); assert.doesNotMatch(JSON.stringify(options.settings), /UNSELECTED LIBRARY TEXT/);
+            assert.deepEqual(options.settings.specialists.map(item => [item.id, item.model]), [['dialogue', 'fixture/dialogue']]);
+            job.editorial = { text: 'Final synthetic story.', status: 'ready', changes: [], unresolved: [], reports: [{ focus: 'dialogue', cycle: 0, report: { summary: 'Dialogue checked.', issues: [] } }, { focus: 'physical', cycle: 0, report: { summary: 'Movement checked.', issues: [] } }], analysis: { words: 12500, paragraphs: 144 }, targetChecks: { formatValid: true } };
+        } });
+    f.byText('Prepare outline from current prompt').click(); await settle();
+    assert.equal(field(f, 'story-builder-style-dialogue-model').disabled, true);
+    f.byText('Generate full story').click(); await settle();
+    assert.ok(f.nodes.some(node => node.tagName === 'summary' && node.textContent === 'Dialogue · review 1'));
+    assert.ok(f.nodes.some(node => node.tagName === 'summary' && node.textContent === 'Physical and anatomical detail · review 1'));
+});
 
 test('budget denial makes zero generation calls and resumes with the same ledger and limit', async () => {
     let paid = 0, captured, firstLedger;
@@ -263,7 +374,7 @@ test('planning activity ticks at zero sections, records only metadata, and separ
     assert.equal(saved.entries.find(e => e.type === 'request').outputCharacters, payload.choices[0].message.content.length);
     assert.doesNotMatch(log, /PRIVATE|messages|Authorization|reasoning/);
     releaseValidation(); await settle(); assert.match(list.textContent, /Outline accepted/);
-    assert.equal(f.nodes.find(n => n.className === 'story-builder-progress-title').textContent, 'Story progress · v0.5.0');
+    assert.equal(f.nodes.find(n => n.className === 'story-builder-progress-title').textContent, 'Story progress · v0.6.0');
     assert.ok(f.nodes.some(n => n.tagName === 'li' && n.textContent.startsWith('Deliver the ledger.')));
     assert.equal(f.context.chat.length, 0);
 });

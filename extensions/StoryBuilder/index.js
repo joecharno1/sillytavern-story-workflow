@@ -16,7 +16,7 @@ import { createRegenerateAction, storyTicketCurrent } from './regenerate-action.
 import { WRITING_ASPECTS, WRITING_PRESETS, normalizePresetLibrary, buildWritingGuidance, specialistPasses } from './writing-tuning.js';
 
 const KEY = 'StoryBuilder';
-const VERSION = '0.6.0';
+const VERSION = '0.7.0';
 const ctx = () => SillyTavern.getContext();
 let job = null, controller = null, operation = 0, applying = false;
 let dialog, status, counts, usage, outline, draftPreview, pendingPreview, notices, panelStatus;
@@ -857,6 +857,9 @@ function mount() {
     modeButton.id = 'story-builder-mode-toggle'; modeButton.setAttribute('aria-pressed', String(values.chatWorkflowEnabled));
     modeButton.dataset.ntTopbarAction = 'story-builder:mode'; modeButton.dataset.ntTopbarLabel = 'Generation mode'; modeButton.dataset.ntTopbarIcon = 'fa-solid fa-wand-magic-sparkles';
     button('Story settings', open, modeBar, 'story-builder-mode-settings');
+    button('Edit last story', () => {
+        Promise.resolve(eventSource.emit('story_workflow_open_editor')).catch(() => say('The follow-up editor could not open. Check that Story Review is installed and reload this tab.'));
+    }, modeBar, 'story-builder-mode-editor');
     modeNote = el('span', undefined, 'story-builder-mode-note'); modeBar.append(modeNote);
     const nativeComposer = document.getElementById('send_form');
     if (nativeComposer) nativeComposer.insertBefore(modeBar, nativeComposer.firstChild);

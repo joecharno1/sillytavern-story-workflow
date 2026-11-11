@@ -2,6 +2,7 @@ import { analyzeDraft, parseReviewReport, applyParagraphReplacement } from './re
 import { safeSettings, REVIEW_SYSTEM, REVISION_SYSTEM } from './review-service.js';
 
 const FOCUS = Object.freeze({
+    general: 'Review the manuscript as a whole for fidelity to the author’s brief, continuity, characterization, dialogue, pacing, and prose. Prefer a few concrete actionable findings to broad rewrites. Distinguish definite contradictions from optional stylistic suggestions.',
     continuity: 'Review continuity, fidelity to the author’s instructions, required story beats, established facts, character knowledge, motivation, and characterization. Prioritize demonstrable contradictions or omissions. Leave sentence-level polish to the prose editor.',
     prose: 'Review prose, dialogue, scene development, pacing, transitions, repetition, specificity, and consistency of voice and perspective. Preserve deliberate stylistic choices. Leave factual continuity checking to the continuity editor unless a problem directly impairs the prose.',
     dialogue: 'Review dialogue and conversation: distinct character voices, subtext, natural exchanges, speaker clarity, and dialogue pacing. Preserve intentional speech patterns and the author’s requested register. Identify local problems rather than supplying a separate dialogue draft.',

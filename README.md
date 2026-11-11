@@ -23,7 +23,7 @@ node scripts/install.mjs --target "/path/to/SillyTavern"
 node scripts/install.mjs --target "/path/to/SillyTavern" --apply
 ```
 
-The first command previews the files. The second installs them under `public/scripts/extensions/third-party`, backing up files that it replaces. It does not edit SillyTavern settings, writing presets, connection profiles, lorebooks, or chats. On first load, the extensions fill in only their own missing preferences; existing values win.
+The first command previews the files. The second installs them under `public/scripts/extensions/third-party`, backing up files that it replaces. It does not edit SillyTavern settings, writing presets, connection profiles, lorebooks, or chats. On first load, the extensions fill in their own missing preferences and preserve existing choices. Version 0.7 disables the old automatic Story Review setting: follow-up editing now requires an explicit action.
 
 For a manual installation, copy `extensions/StoryBuilder` and `extensions/StoryReview` into SillyTavern's `public/scripts/extensions/third-party` folder. Back up existing folders before replacing them.
 
@@ -56,6 +56,18 @@ Stage models can also be chosen separately. An empty continuity model keeps the 
 
 More reviewers can increase latency and cost, and models may disagree or miss problems. Advanced tuning does not guarantee a particular style or higher quality. A running job keeps its captured settings; start a fresh job to use a different style or model configuration.
 
+## Follow-up editing
+
+Choose **Edit last story** beside the chat composer, or **Follow-up editor** from the menu, to work on the latest completed story reply after delivery or a reply produced by normal SillyTavern generation. Opening the editor shows local counts and controls without sending a model request. Choose a **Review focus**—general, continuity, prose, dialogue, physical description, characterization, or atmosphere—then select **Review current draft** or request a targeted revision preview.
+
+**Use Builder writing styles and category model choices** inherits the selected guidance. A category's specialist model is inherited only when that option and Builder tuning are both enabled. The review and revision model overrides are separate; blank fields inherit the applicable Builder model. For a category focus, **Style preset for this focus** can use its Builder selection, another built-in or saved style, custom instructions, or no added category guidance. These editing choices do not change Builder's saved preferences or preset library. Unselected saved presets are not sent to models.
+
+Follow-up editing uses the selected reply's story text, the latest user brief, and accepted visible chat history. It does not freshly compile active lorebooks, character cards, or the writing preset into a new SillyTavern prompt. Put any new instructions needed for the edit in the revision instruction field.
+
+Select a contiguous paragraph range and describe the change. **Preview targeted revision** shows the original passage and proposed replacement. **Apply as new reply version** adds the result as another swipe, preserving the original. Applying a preview makes no model request. A changed prompt, story, swipe, or source chat invalidates the old preview; select the current version before editing again.
+
+Follow-up editing has its own **$1 session allowance**, separate from the Builder job's allowance. Reviews, revision previews, and retries share that session ledger. Switching models, focus, styles, or the selected draft, and applying a revision, do not silently reset it. Interrupted requests can retain an unknown-charge allowance. During normal use, choose **New editing session** to start a new allowance. The ledger lives in the current browser tab, so reloading the page also starts a fresh session. Neither action erases earlier provider charges. The allowance is an estimated pre-request safeguard with the same billing limitations described below.
+
 ## Cost and models
 
 Every planning, writing, checking, review, and revision request can incur provider charges. A long source is reused across multiple requests. Output length, latency, and cost vary by model and provider.
@@ -66,7 +78,7 @@ Before dispatching a request, the workflow reserves an estimate using uncached i
 
 Specialist reviews and revisions use that same limit. Parallel reviews reserve their requests independently: one may finish while another is blocked by the remaining allowance. Completed reports and the current manuscript are preserved.
 
-Story Builder's automatic zTracker updates are off while a positive spending limit is active. This does not change zTracker's own global settings or its behavior on normal chat replies. Standalone automatic Story Review starts off and has separate controls; its independent requests are not part of a Builder job's limit.
+Story Builder's automatic zTracker updates are off while a positive spending limit is active. This does not change zTracker's own global settings or its behavior on normal chat replies. Follow-up editing is manual and uses its own session allowance; its requests are not part of a Builder job's limit.
 
 ## Optional extensions
 

@@ -118,6 +118,14 @@ function fixture({ run, plan: customPlan, fetcher, settings = {}, composer = fal
         byText: text => nodes.find(n => n.tagName === 'button' && n.textContent === text), status: () => nodes.find(n => n.className === 'sb-status').textContent, preview: () => nodes.find(n => n.className === 'sb-preview'), dialog: () => nodes.find(n => n.id === 'story-builder-dialog') };
 }
 
+test('composer follow-up editor shortcut opens the editor without starting generation', async () => {
+    const f = fixture({ composer: true }); let opened = 0;
+    f.eventSource.on('story_workflow_open_editor', () => { opened++; });
+    f.byText('Edit last story').click(); await settle();
+    assert.equal(opened, 1); assert.equal(f.metrics.fetchCalls, 0); assert.equal(f.metrics.capture, 0);
+    assert.equal(f.extension_settings.StoryBuilder.chatWorkflowEnabled, false);
+});
+
 test('composer mode switch is visible, synchronized, and never sends a message itself', async () => {
     const f = fixture({ composer: true });
     const mode = field(f, 'story-builder-mode-toggle'), form = field(f, 'send_form'), bar = field(f, 'story-builder-mode-bar');
@@ -374,7 +382,7 @@ test('planning activity ticks at zero sections, records only metadata, and separ
     assert.equal(saved.entries.find(e => e.type === 'request').outputCharacters, payload.choices[0].message.content.length);
     assert.doesNotMatch(log, /PRIVATE|messages|Authorization|reasoning/);
     releaseValidation(); await settle(); assert.match(list.textContent, /Outline accepted/);
-    assert.equal(f.nodes.find(n => n.className === 'story-builder-progress-title').textContent, 'Story progress · v0.6.0');
+    assert.equal(f.nodes.find(n => n.className === 'story-builder-progress-title').textContent, 'Story progress · v0.7.0');
     assert.ok(f.nodes.some(n => n.tagName === 'li' && n.textContent.startsWith('Deliver the ledger.')));
     assert.equal(f.context.chat.length, 0);
 });

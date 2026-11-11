@@ -1,9 +1,20 @@
-#story-review-dialog { color:var(--SmartThemeBodyColor,#eee); background:var(--SmartThemeBlurTintColor,#202025); border:1px solid #8886; border-radius:12px; max-width:min(1050px,94vw); width:94vw; max-height:88vh; padding:20px; backdrop-filter:blur(16px); }
+#story-review-dialog { color:var(--SmartThemeBodyColor,#eee); background:var(--SmartThemeBlurTintColor,#202025); border:1px solid #8886; border-radius:12px; max-width:min(1050px,94vw); width:94vw; max-height:88vh; padding:20px; backdrop-filter:blur(16px); overflow:auto; }
 #story-review-dialog::backdrop {background:#0009;}
 #story-review-dialog .sr-top {display:flex;align-items:center;justify-content:space-between;gap:12px;}
 #story-review-dialog h2 {margin:0;font-size:1.25rem;}
 #story-review-dialog .sr-actions {display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;}
+#story-review-dialog .sr-actions button {flex:0 0 auto;width:auto !important;max-width:100%;}
 #story-review-dialog button,#story-review-dialog input,#story-review-dialog textarea {font:inherit;}
+#story-review-dialog select {font:inherit;width:100%;}
+#story-review-dialog .sr-fields {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px;}
+#story-review-dialog .sr-fields input:not([type=checkbox]),#story-review-dialog .sr-fields select {display:block;width:100%;margin-top:5px;}
+#story-review-dialog .sr-check {display:flex;align-items:center;gap:8px;}
+#story-review-dialog .sr-preferences {padding:14px;border:1px solid #8885;border-radius:8px;margin:14px 0;}
+#story-review-dialog .sr-advanced-preferences {margin-top:12px;}
+#story-review-dialog .sr-advanced-preferences > summary {cursor:pointer;font-weight:600;}
+#story-review-dialog .sr-note {font-size:.9em;opacity:.85;line-height:1.45;}
+#story-review-dialog .sr-effective,#story-review-dialog .sr-spending {font-size:.9em;line-height:1.5;overflow-wrap:anywhere;}
+#story-review-dialog [hidden] {display:none !important;}
 #story-review-dialog button {padding:7px 12px;cursor:pointer;}
 #story-review-dialog button:disabled {opacity:.5;cursor:default;}
 #story-review-dialog .sr-counts {padding:10px;border:1px solid #8886;border-radius:6px;margin:12px 0;}
@@ -19,3 +30,4 @@
 #story-review-settings label {display:block;margin:8px 0;}
 #story-review-settings input[type=text] {width:100%;}
 #story-review-settings .sr-note {font-size:.9em;opacity:.85;}
+@media(max-width:600px) { #story-review-dialog {padding:12px;} #story-review-dialog .sr-fields {grid-template-columns:1fr;} #story-review-dialog .sr-top {flex-wrap:wrap;} #story-review-dialog .sr-actions button {max-width:100%;} }

@@ -1,0 +1,21 @@
+#story-review-dialog { color:var(--SmartThemeBodyColor,#eee); background:var(--SmartThemeBlurTintColor,#202025); border:1px solid #8886; border-radius:12px; max-width:min(1050px,94vw); width:94vw; max-height:88vh; padding:20px; backdrop-filter:blur(16px); }
+#story-review-dialog::backdrop {background:#0009;}
+#story-review-dialog .sr-top {display:flex;align-items:center;justify-content:space-between;gap:12px;}
+#story-review-dialog h2 {margin:0;font-size:1.25rem;}
+#story-review-dialog .sr-actions {display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;}
+#story-review-dialog button,#story-review-dialog input,#story-review-dialog textarea {font:inherit;}
+#story-review-dialog button {padding:7px 12px;cursor:pointer;}
+#story-review-dialog button:disabled {opacity:.5;cursor:default;}
+#story-review-dialog .sr-counts {padding:10px;border:1px solid #8886;border-radius:6px;margin:12px 0;}
+#story-review-dialog .sr-status {white-space:pre-wrap;line-height:1.5;}
+#story-review-dialog .sr-issue {border-left:3px solid #b39c69;padding:10px 14px;margin:10px 0;background:#8881;}
+#story-review-dialog .sr-issue p {margin:6px 0;white-space:pre-wrap;}
+#story-review-dialog label {display:block;margin-top:12px;}
+#story-review-dialog textarea {width:100%;min-height:90px;}
+#story-review-dialog .sr-preview {white-space:pre-wrap;max-height:30vh;overflow:auto;border:1px solid #8885;padding:12px;}
+#story-review-dialog small {opacity:.8;}
+#story-review-dialog .sr-warning {color:#e7c88c;}
+#story-review-settings {margin:10px 0;padding:10px;border:1px solid #8884;border-radius:8px;}
+#story-review-settings label {display:block;margin:8px 0;}
+#story-review-settings input[type=text] {width:100%;}
+#story-review-settings .sr-note {font-size:.9em;opacity:.85;}

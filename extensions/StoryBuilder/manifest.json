@@ -1,0 +1,13 @@
+{
+  "display_name": "Story Builder",
+  "loading_order": 85,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "generate_interceptor": "StoryBuilder_Intercept",
+  "css": "style.css",
+  "author": "Local writing tools",
+  "version": "0.5.0",
+  "minimum_client_version": "1.19.0",
+  "description": "Plan, write, check continuity, review and revise stories in chat, with configurable models and an estimated spending limit."
+}

@@ -1,0 +1,13 @@
+{
+  "name": "sillytavern-story-workflow",
+  "version": "0.5.0",
+  "private": true,
+  "description": "A source-preserving long-story workflow and editorial companion for SillyTavern.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node scripts/test.mjs",
+    "install:tavern": "node scripts/install.mjs"
+  }
+}

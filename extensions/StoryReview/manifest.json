@@ -1,0 +1,12 @@
+{
+  "display_name": "Story Review",
+  "loading_order": 80,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "Local writing tools",
+  "version": "1.1.1",
+  "minimum_client_version": "1.19.0",
+  "description": "Independent continuity and prose review services, targeted revisions, and final Story Builder reports."
+}
